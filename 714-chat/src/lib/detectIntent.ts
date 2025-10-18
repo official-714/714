@@ -1,128 +1,76 @@
-// src/lib/detectIntent.ts
-import Fuse from "fuse.js"
+/**
+ * detectIntent.ts
+ * Lightweight intent detection logic for your AI Agent
+ * Uses keyword + pattern matching to route requests intelligently
+ */
 
 export type IntentType =
-  | "crypto_price"
-  | "crypto_info"
-  | "network_info"
-  | "company_info"
-  | "market_info"
-  | "news_info"
-  | "rephrase"
-  | "writing"
+  | "crypto"
+  | "address"
   | "general"
+  | "knowledge"
+  | "rephrase"
+  | "rewrite"
+  | "text_rewrite"
+  | "religion"
+  | "religion_search"
+  | "web"
+  | "unknown";
 
-// 🪙 Keywords for crypto, chains, projects
-const cryptoKeywords = [
-  // Top chains
-  "btc", "bitcoin", "eth", "ethereum", "bnb", "binance", "sol", "solana",
-  "ada", "cardano", "xrp", "ripple", "avax", "avalanche", "dot", "polkadot",
-  "matic", "polygon", "ton", "tron", "doge", "dogecoin", "ltc", "litecoin",
-  "base", "optimism", "arbitrum", "zksync", "scroll", "linea", "blast",
-  "cosmos", "atom", "celestia", "sei", "sui", "aptos", "near", "algorand",
-  "starknet", "mantle", "hedera", "icp", "flow", "eos", "fantom", "moonbeam",
-  "ronin", "core", "taiko", "scroll", "zeta", "mode", "frax", "blast", "zora",
-  // Meme & trending
-  "pepe", "shib", "floki", "bonk", "dogwifhat", "wif", "mew", "turf", "rekt",
-]
+export function detectIntent(query: string): IntentType {
+  const q = query.toLowerCase().trim();
 
-// 💬 Financial & market-related words
-const priceWords = [
-  "price", "worth", "value", "chart", "rate", "market", "cap", "supply",
-  "circulating", "trend", "increase", "decrease", "rise", "fall", "up", "down",
-]
-
-// 🌐 Network/technical terms
-const networkWords = [
-  "network", "chain", "layer2", "layer 2", "rollup", "bridge", "rpc", "node",
-  "mainnet", "testnet", "bridge", "ecosystem", "staking", "validator",
-]
-
-// 🧠 Writing / grammar improvements
-const writingWords = [
-  "rephrase", "rewrite", "fix grammar", "make better", "improve", "polish",
-  "simplify", "correct", "enhance", "summarize", "paraphrase",
-]
-
-// 🗞️ News / updates / general info
-const newsWords = [
-  "news", "update", "announcement", "launch", "event", "partnership",
-  "integration", "hack", "airdrop", "scam", "release", "whats new", "today",
-]
-
-// Fuzzy matcher
-const fuse = new Fuse(cryptoKeywords, { includeScore: true, threshold: 0.38 })
-
-export function detectIntent(message: string): IntentType {
-  const lower = message.toLowerCase().trim()
-
-  // Handle empty, emoji, or numeric-only input gracefully
-  if (!lower || /^[\d\s.,!?]+$/.test(lower)) {
-    return "general"
+  // ✍️ 1️⃣ Rephrase / Rewrite
+  if (/rephrase|rewrite|paraphrase|improve|simplify|make clearer/i.test(q)) {
+    return /text|sentence|paragraph/.test(q) ? "text_rewrite" : "rewrite";
   }
 
-  // 💬 Writing or rephrase detection
-  if (writingWords.some(w => lower.includes(w)) || /^polish:?/.test(lower)) {
-    return "rephrase"
-  }
-
-  // 💰 Crypto detection logic
-  const hasDollar = /\$[a-z]{2,10}/i.test(lower)
-  const fuzzyMatch = fuse.search(lower)
-  const hasCryptoWord =
-    cryptoKeywords.some(k => lower.includes(k)) || fuzzyMatch.length > 0
-
-  const hasPriceWord = priceWords.some(w => lower.includes(w))
-  const hasNetworkWord = networkWords.some(w => lower.includes(w))
-  const hasNewsWord = newsWords.some(w => lower.includes(w))
-
-  // 1️⃣ Price intent
-  if ((hasCryptoWord || hasDollar) && hasPriceWord) {
-    return "crypto_price"
-  }
-
-  // 2️⃣ Network/chain intent
-  if (hasNetworkWord && hasCryptoWord) {
-    return "network_info"
-  }
-
-  // 3️⃣ Crypto info (project, tokenomics, supply, etc.)
+  // 🕊️ 2️⃣ Religion / Scriptures / Faith topics
   if (
-    hasCryptoWord &&
-    /(what|who|how|when|show|explain|info|details|about|project)/.test(lower)
+    /bible|jesus|god|quran|koran|verse|prayer|scripture|psalm|genesis|matthew|corinthians|holy|faith|islam|christian|church|mosque/i.test(
+      q
+    )
   ) {
-    return "crypto_info"
+    return /about|search|find/i.test(q)
+      ? "religion_search"
+      : "religion";
   }
 
-  // 4️⃣ Market sentiment or overview
-  if (/(market|bullish|bearish|trend|prediction|cap)/.test(lower)) {
-    return "market_info"
-  }
-
-  // 5️⃣ News or announcements
-  if (hasNewsWord || /(what.?new|latest|update|today)/.test(lower)) {
-    return "news_info"
-  }
-
-  // 6️⃣ Company or person info
-  if (/(ceo|founder|company|owner|team|who built|creator|developer)/.test(lower)) {
-    return "company_info"
-  }
-
-  // 7️⃣ Short “crypto mention” only (like “btc”)
-  if (hasCryptoWord || hasDollar) {
-    // If user typed only 2–5 letters like “btc” or “eth”
-    if (lower.length <= 6) {
-      return "crypto_price"
+  // 💰 3️⃣ Crypto queries (prices, tokens, wallets)
+  if (
+    /(price|token|coin|market|btc|eth|sol|bnb|matic|crypto|wallet|block|hash|transaction|chain|exchange)/i.test(
+      q
+    )
+  ) {
+    if (/^0x[a-fA-F0-9]{40}$/.test(q) || /wallet|address/i.test(q)) {
+      return "address";
     }
-    return "crypto_info"
+    return "crypto";
   }
 
-  // 8️⃣ Writing or grammar tasks
-  if (/(sentence|grammar|write|essay|caption|bio)/.test(lower)) {
-    return "writing"
+  // 🧠 4️⃣ Knowledge / Educational / Informational
+  if (
+    /(who|when|why|how|history|explain|describe|summarize|teach|learn|education|sport|game|finance|economy|stock|founder|year|origin|project|company)/i.test(
+      q
+    )
+  ) {
+    return "knowledge";
   }
 
-  // 9️⃣ Fallback
-  return "general"
+  // 🌐 5️⃣ General search / Web lookups
+  if (
+    /(news|info|information|tell me|search|find|latest|current|today|lookup|query|web|internet)/i.test(
+      q
+    )
+  ) {
+    return "web";
+  }
+
+  // 🔗 6️⃣ Wallet / Blockchain address
+  if (/^0x[a-fA-F0-9]{40}$/.test(q)) {
+    return "address";
+  }
+
+  // 🌀 7️⃣ Fallback
+  return "unknown";
 }

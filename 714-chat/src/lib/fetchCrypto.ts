@@ -1,149 +1,128 @@
-// src/lib/fetchCrypto.ts
+import axios from "axios";
 
-export interface CryptoData {
-  name: string;
-  symbol: string;
-  price: string;
-  change: string;
-  chartPoints: number[];
-  image: string;
-  slug?: string;
-  description: string;
+const COVALENT_KEY = process.env.NEXT_PUBLIC_COVALENT_API_KEY;
+
+// Helper to clean/normalize input
+function normalizeSymbol(symbol: string) {
+  return symbol.trim().toUpperCase();
 }
 
-/**
- * Fetch crypto data intelligently from Covalent (multi-chain)
- * with fallback to CoinGecko for unmatched assets.
- */
-export async function fetchCrypto(rawQuery: string): Promise<CryptoData | string> {
+export async function fetchCrypto(query: string) {
+  const symbol = normalizeSymbol(query);
+
   try {
-    const term = extractCoinQuery(rawQuery);
-    if (!term) {
-      return `I couldn’t determine which crypto you meant. Try "$BTC" or "price of solana".`;
-    }
+    /* --------------------------------------------------------
+       1️⃣ COVALENT (Multi-chain data)
+    --------------------------------------------------------- */
+    const covalentUrl = `https://api.covalenthq.com/v1/pricing/tickers/?tickers=${symbol}&key=${COVALENT_KEY}`;
+    const covalentRes = await axios.get(covalentUrl);
+    const covalentData = covalentRes.data?.data?.items?.[0];
 
-    const apiKey = process.env.NEXT_PUBLIC_COVALENT_API_KEY;
-    if (!apiKey) {
-      console.warn("⚠️ Missing Covalent API key!");
-    }
-
-    const searchTerm = term.toLowerCase();
-
-    // 🔹 Try fetching from Covalent across all supported chains
-    const covalentUrl = `https://api.covalenthq.com/v1/pricing/tickers/?tickers=${encodeURIComponent(
-      searchTerm
-    )}&key=${apiKey}`;
-
-    const covalentRes = await fetch(covalentUrl);
-    const covalentJson = await covalentRes.json();
-
-    const found =
-      covalentJson?.data?.items?.find(
-        (t: any) =>
-          t.contract_ticker_symbol?.toLowerCase() === searchTerm ||
-          t.contract_name?.toLowerCase().includes(searchTerm)
-      ) ||
-      covalentJson?.data?.items?.[0];
-
-    if (found) {
-      // ✅ Build response
+    if (covalentData) {
       return {
-        name: found.contract_name || found.label || "Unknown Token",
-        symbol: found.contract_ticker_symbol?.toUpperCase() || searchTerm.toUpperCase(),
-        price: found.quote_rate
-          ? `$${Number(found.quote_rate).toLocaleString("en-US", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 6,
-            })}`
-          : "N/A",
-        change:
-          found.quote_rate_24h && found.quote_rate
-            ? (((found.quote_rate - found.quote_rate_24h) / found.quote_rate_24h) * 100).toFixed(2)
-            : "N/A",
-        chartPoints: [], // Covalent free tier doesn’t provide sparkline yet
-        image:
-          found.logo_url ||
-          `https://assets.coingecko.com/coins/images/1/thumb/bitcoin.png`, // fallback
-        description: `Live price data fetched from Covalent for ${found.contract_name}.`,
-        slug: found.contract_address || found.contract_ticker_symbol?.toLowerCase(),
+        source: "covalent",
+        name: covalentData.contract_name || symbol,
+        symbol: covalentData.contract_ticker_symbol,
+        price: covalentData.quote_rate,
+        marketCap: covalentData.market_cap_usd,
+        volume24h: covalentData.volume_24h,
+        logo: covalentData.logo_url,
+        change24h: covalentData.quote_rate_24h_change,
+        chartPoints: [],
       };
     }
 
-    // 🔸 Fallback: CoinGecko
-    const fallback = await fetchFromCoinGecko(searchTerm);
-    if (fallback) return fallback;
-
-    return `Couldn't find data for "${term}". Try another token or network.`;
-  } catch (err) {
-    console.error("fetchCrypto error:", err);
-    return "Something went wrong while fetching crypto data.";
-  }
-}
-
-/**
- * Fallback: fetch from CoinGecko if Covalent has no match
- */
-async function fetchFromCoinGecko(term: string): Promise<CryptoData | null> {
-  try {
-    const searchUrl = `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(term)}`;
-    const searchRes = await fetch(searchUrl);
-    if (!searchRes.ok) return null;
-    const searchJson = await searchRes.json();
-    const match = searchJson.coins?.find(
-      (c: any) =>
-        c.id?.includes(term) ||
-        c.name?.toLowerCase().includes(term) ||
-        c.symbol?.toLowerCase() === term
+    /* --------------------------------------------------------
+       2️⃣ COINGECKO (Main fallback)
+    --------------------------------------------------------- */
+    const cgRes = await axios.get(
+      `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${symbol.toLowerCase()}`
     );
+    const cgData = cgRes.data?.[0];
 
-    if (!match?.id) return null;
+    if (cgData) {
+      return {
+        source: "coingecko",
+        name: cgData.name,
+        symbol: cgData.symbol.toUpperCase(),
+        price: cgData.current_price,
+        marketCap: cgData.market_cap,
+        volume24h: cgData.total_volume,
+        logo: cgData.image,
+        change24h: cgData.price_change_percentage_24h,
+        chartPoints: [],
+        description: cgData.description || "No summary available.",
+        slug: cgData.id,
+      };
+    }
 
-    const coinUrl = `https://api.coingecko.com/api/v3/coins/${match.id}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=true`;
-    const res = await fetch(coinUrl);
-    if (!res.ok) return null;
+    /* --------------------------------------------------------
+       3️⃣ DEXSCREENER (For DEX-only tokens)
+    --------------------------------------------------------- */
+    const dexUrl = `https://api.dexscreener.com/latest/dex/search/?q=${symbol}`;
+    const dexRes = await axios.get(dexUrl);
+    const dexPair = dexRes.data?.pairs?.[0];
 
-    const data = await res.json();
-    const market = data.market_data;
+    if (dexPair) {
+      return {
+        source: "dexscreener",
+        name: dexPair.baseToken.name,
+        symbol: dexPair.baseToken.symbol,
+        price: parseFloat(dexPair.priceUsd),
+        marketCap: dexPair.fdv,
+        volume24h: dexPair.volume?.h24,
+        liquidity: dexPair.liquidity?.usd,
+        change24h: dexPair.priceChange?.h24,
+        logo: dexPair.info?.imageUrl || "",
+        chartPoints:
+          dexPair.txns
+            ? Object.entries(dexPair.txns)
+                .slice(-10)
+                .map(([time, txn]: any) => ({
+                  time,
+                  value: txn?.buy || txn?.sell || 0,
+                }))
+            : [],
+        description: `DEX Token on ${dexPair.chainId || "unknown chain"}`,
+        slug: dexPair.pairAddress || symbol.toLowerCase(),
+      };
+    }
 
-    const formattedPrice = market?.current_price?.usd
-      ? market.current_price.usd.toLocaleString("en-US", {
-          style: "currency",
-          currency: "USD",
-        })
-      : "N/A";
+    /* --------------------------------------------------------
+       4️⃣ OKX Web3 Market (Global fallback)
+    --------------------------------------------------------- */
+    const okxUrl = `https://www.okx.com/api/v5/market/index-tickers?instId=${symbol}-USD`;
+    const okxRes = await axios.get(okxUrl);
+    const okxData = okxRes.data?.data?.[0];
 
+    if (okxData) {
+      return {
+        source: "okx",
+        name: symbol,
+        symbol,
+        price: parseFloat(okxData.last),
+        marketCap: null,
+        volume24h: parseFloat(okxData.vol24h),
+        logo: `https://static.okx.com/cdn/okx-cdn/assets/imgs/221/${symbol.toLowerCase()}.png`,
+        change24h: parseFloat(okxData.change24h) || null,
+        description: "OKX global market data feed.",
+        slug: symbol.toLowerCase(),
+        chartPoints: [],
+      };
+    }
+
+    /* --------------------------------------------------------
+       ❌ No result found anywhere
+    --------------------------------------------------------- */
     return {
-      name: data.name || "Unknown",
-      symbol: data.symbol?.toUpperCase() || "N/A",
-      price: formattedPrice,
-      change: market?.price_change_percentage_24h?.toFixed(2) || "N/A",
-      chartPoints: market?.sparkline_7d?.price || [],
-      image: data.image?.thumb || "",
-      slug: data.id,
-      description:
-        (data.description?.en &&
-          data.description.en.split("\n")[0].split(".")[0]) ||
-        `No description available for ${data.name}.`,
+      error: true,
+      message: `No live data found for ${symbol}. Please check the token name or address.`,
     };
-  } catch (e) {
-    console.error("CoinGecko fallback failed:", e);
-    return null;
+  } catch (err: any) {
+    console.error("Error fetching crypto:", err.message);
+    return {
+      error: true,
+      message: "Unable to fetch crypto data at the moment.",
+    };
   }
-}
-
-/**
- * Extracts probable token name/ticker from user text.
- */
-function extractCoinQuery(message: string): string | null {
-  if (!message || typeof message !== "string") return null;
-  const text = message.trim().toLowerCase();
-
-  const matchDollar = text.match(/\$([a-z0-9]{2,10})/i);
-  if (matchDollar && matchDollar[1]) return matchDollar[1];
-
-  const cleaned = text.replace(/[?.,!]/g, " ");
-  const ignore = /\b(price|chart|token|coin|crypto|worth|show|value|network|today|usd|please|tell|me|info|data)\b/g;
-  const words = cleaned.replace(ignore, " ").split(/\s+/).filter(Boolean);
-
-  return words.length ? words[0] : null;
 }
